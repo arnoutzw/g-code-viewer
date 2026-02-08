@@ -1,0 +1,1505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="G-code Viewer PWA - Preview and simulate CNC toolpaths">
+    <meta name="theme-color" content="#18181b">
+    <title>G-code Viewer PWA</title>
+    <link rel="manifest" href="data:application/manifest+json,{%22name%22:%22G-code%20Viewer%22,%22short_name%22:%22GCode%20Viewer%22,%22start_url%22:%22/%22,%22display%22:%22standalone%22,%22background_color%22:%22%2318181b%22,%22theme_color%22:%22%23f59e0b%22}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        * {
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        input, textarea { -webkit-user-select: text; user-select: text; }
+        
+        body {
+            background-color: #09090b;
+            color: #e4e4e7;
+            overflow: hidden;
+        }
+        
+        .terminal-dots {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            margin-right: 12px;
+        }
+        .terminal-dots span {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .terminal-dots .red { background-color: #ef4444; }
+        .terminal-dots .yellow { background-color: #eab308; }
+        .terminal-dots .green { background-color: #22c55e; }
+        
+        .syntax-highlight {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .g-code { color: #f59e0b; }
+        .m-code { color: #22c55e; }
+        .coordinate { color: #06b6d4; }
+        .feed-rate { color: #eab308; }
+        .comment { color: #71717a; }
+        
+        /* Custom scrollbars */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #27272a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #52525b;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #71717a;
+        }
+        
+        canvas {
+            cursor: grab;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        
+        .line-number {
+            display: inline-block;
+            width: 40px;
+            text-align: right;
+            color: #71717a;
+            margin-right: 12px;
+            user-select: none;
+        }
+        
+        .current-line {
+            background-color: rgba(245, 158, 11, 0.1);
+            border-left: 3px solid #f59e0b;
+        }
+        
+        .editor-wrapper {
+            display: flex;
+            height: 100%;
+            position: relative;
+        }
+        
+        .editor-input {
+            flex: 1;
+            padding: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            background-color: #27272a;
+            color: #e4e4e7;
+            border: none;
+            resize: none;
+            overflow: hidden;
+        }
+        
+        .editor-highlight {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            width: calc(100% - 32px);
+            height: calc(100% - 32px);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            pointer-events: none;
+            color: transparent;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            overflow: hidden;
+        }
+        
+        .tab-active {
+            background-color: #27272a;
+            border-bottom: 2px solid #f59e0b;
+        }
+        
+        .tab-inactive {
+            background-color: #18181b;
+            border-bottom: 2px solid transparent;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+    </style>
+</head>
+<body class="font-sans">
+    <div id="app" class="flex flex-col h-screen bg-zinc-950">
+        <!-- Header -->
+        <header class="bg-zinc-900 border-b border-zinc-700 px-6 py-4 shadow-lg">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="terminal-dots">
+                        <span class="red"></span>
+                        <span class="yellow"></span>
+                        <span class="green"></span>
+                    </div>
+                    <h1 class="font-mono font-bold text-2xl text-amber-500">G-CODE VIEWER</h1>
+                </div>
+                <div class="flex items-center gap-4">
+                    <button id="exportBtn" class="bg-amber-500 hover:bg-amber-400 text-zinc-900 font-mono font-bold px-4 py-2.5 rounded-lg transition-colors">
+                        Export
+                    </button>
+                    <button id="exampleBtn" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-mono font-bold px-4 py-2.5 rounded-lg border border-zinc-700 transition-colors">
+                        Examples
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Container -->
+        <div class="flex-1 flex overflow-hidden">
+            <!-- Left Panel: Editor -->
+            <div class="w-1/3 border-r border-zinc-700 flex flex-col bg-zinc-900">
+                <div class="flex gap-2 border-b border-zinc-700 px-4 pt-4">
+                    <button class="tab-inactive px-4 py-2 text-sm rounded-t-lg transition-all" data-tab="paste">
+                        Paste G-code
+                    </button>
+                    <button class="tab-inactive px-4 py-2 text-sm rounded-t-lg transition-all" data-tab="file">
+                        Upload File
+                    </button>
+                </div>
+                <div id="editor-container" class="flex-1 flex flex-col overflow-hidden">
+                    <div id="pasteTab" class="flex-1 flex flex-col p-4 gap-3">
+                        <textarea id="gcodeInput" class="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 font-mono text-sm text-zinc-100 focus:border-amber-500 focus:outline-none resize-none" placeholder="Paste G-code here..."></textarea>
+                        <button id="parseBtn" class="bg-amber-500 hover:bg-amber-400 text-zinc-900 font-mono font-bold px-4 py-2.5 rounded-lg transition-colors">
+                            Parse & Render
+                        </button>
+                    </div>
+                    <div id="fileTab" class="hidden flex-1 flex flex-col p-4 gap-3">
+                        <div id="dropZone" class="flex-1 border-2 border-dashed border-zinc-700 rounded-lg flex items-center justify-center cursor-pointer hover:border-amber-500 transition-colors bg-zinc-800 bg-opacity-50">
+                            <div class="text-center">
+                                <svg class="w-12 h-12 mx-auto text-zinc-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                <p class="text-zinc-300 mb-2">Drag G-code file here</p>
+                                <p class="text-zinc-500 text-xs">or click to select (.nc, .gcode, .tap, .ngc)</p>
+                            </div>
+                            <input type="file" id="fileInput" class="hidden" accept=".nc,.gcode,.tap,.ngc,.txt" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle Panel: Visualization -->
+            <div class="flex-1 flex flex-col border-r border-zinc-700 bg-zinc-950">
+                <div class="flex gap-2 border-b border-zinc-700 px-4 pt-4 pb-2">
+                    <button class="tab-inactive px-4 py-2 text-sm rounded-t-lg transition-all" data-view="2d">
+                        2D View
+                    </button>
+                    <button class="tab-inactive px-4 py-2 text-sm rounded-t-lg transition-all" data-view="3d">
+                        3D View
+                    </button>
+                </div>
+                <div class="flex-1 flex flex-col overflow-hidden">
+                    <canvas id="canvas2d" class="flex-1 hidden bg-zinc-900"></canvas>
+                    <canvas id="canvas3d" class="flex-1 hidden bg-zinc-900"></canvas>
+                    <div id="noCanvas" class="flex-1 flex items-center justify-center text-zinc-500">
+                        <div class="text-center">
+                            <svg class="w-16 h-16 mx-auto mb-4 text-zinc-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+                            </svg>
+                            <p class="text-zinc-400">Parse G-code to visualize</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Controls & Stats -->
+            <div class="w-80 border-l border-zinc-700 flex flex-col bg-zinc-900 overflow-y-auto">
+                <!-- Simulation Controls -->
+                <div class="bg-zinc-800 border-b border-zinc-700 p-4">
+                    <h2 class="font-mono font-bold text-amber-500 text-sm mb-4">SIMULATION</h2>
+                    <div class="flex gap-2 mb-4">
+                        <button id="playBtn" class="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-900 font-mono font-bold px-3 py-2.5 rounded-lg transition-colors text-sm">
+                            ▶ Play
+                        </button>
+                        <button id="pauseBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2.5 rounded-lg transition-colors text-sm">
+                            ⏸ Pause
+                        </button>
+                        <button id="stopBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2.5 rounded-lg transition-colors text-sm">
+                            ⏹ Stop
+                        </button>
+                    </div>
+                    <div class="flex gap-2 mb-4">
+                        <button id="stepBackBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2 rounded-lg transition-colors text-sm">
+                            ◀ Step
+                        </button>
+                        <button id="stepFwdBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2 rounded-lg transition-colors text-sm">
+                            Step ▶
+                        </button>
+                    </div>
+                    <div class="mb-4">
+                        <label class="text-zinc-400 text-xs block mb-2">Speed: <span id="speedValue" class="text-amber-500 font-mono">1x</span></label>
+                        <input type="range" id="speedSlider" min="1" max="100" value="1" class="w-full cursor-pointer accent-amber-500">
+                    </div>
+                    <div class="mb-4">
+                        <label class="text-zinc-400 text-xs block mb-2">Progress</label>
+                        <div class="flex gap-2 items-center">
+                            <div class="flex-1 bg-zinc-700 rounded-full h-2 overflow-hidden">
+                                <div id="progressBar" class="bg-amber-500 h-full transition-all duration-100" style="width: 0%"></div>
+                            </div>
+                            <span id="progressText" class="text-zinc-400 font-mono text-xs">0/0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tool Settings -->
+                <div class="border-b border-zinc-700 p-4">
+                    <h2 class="font-mono font-bold text-amber-500 text-sm mb-4">TOOL SETTINGS</h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-zinc-400 text-xs block mb-2">Tool Diameter (mm)</label>
+                            <input type="number" id="toolDiameter" value="3.175" step="0.1" min="0" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 font-mono text-sm text-zinc-100 focus:border-amber-500 focus:outline-none">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Real-time Display -->
+                <div class="border-b border-zinc-700 p-4">
+                    <h2 class="font-mono font-bold text-amber-500 text-sm mb-4">CURRENT STATE</h2>
+                    <div class="space-y-2 font-mono text-xs">
+                        <div class="flex justify-between">
+                            <span class="text-zinc-400">X:</span>
+                            <span id="displayX" class="text-cyan-400">0.000</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-400">Y:</span>
+                            <span id="displayY" class="text-cyan-400">0.000</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-400">Z:</span>
+                            <span id="displayZ" class="text-cyan-400">0.000</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-400">F:</span>
+                            <span id="displayF" class="text-yellow-400">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-400">S:</span>
+                            <span id="displayS" class="text-yellow-400">0</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-zinc-400">T:</span>
+                            <span id="displayT" class="text-green-400">0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Statistics -->
+                <div class="border-b border-zinc-700 p-4">
+                    <h2 class="font-mono font-bold text-amber-500 text-sm mb-4">STATISTICS</h2>
+                    <div class="space-y-3 text-xs">
+                        <div class="bg-zinc-800 border border-zinc-700 rounded-lg p-3">
+                            <p class="text-zinc-400 mb-2">Total Distance</p>
+                            <p class="font-mono text-amber-500 font-bold text-sm"><span id="statTotalDist">0.00</span> mm</p>
+                            <p class="text-zinc-500 text-xs mt-1">Cuts: <span id="statCutDist">0.00</span> mm</p>
+                            <p class="text-zinc-500 text-xs">Rapids: <span id="statRapidDist">0.00</span> mm</p>
+                        </div>
+                        <div class="bg-zinc-800 border border-zinc-700 rounded-lg p-3">
+                            <p class="text-zinc-400 mb-2">Bounding Box</p>
+                            <p class="font-mono text-cyan-400 font-bold text-xs">
+                                <span id="statBBoxX">0</span> × 
+                                <span id="statBBoxY">0</span> × 
+                                <span id="statBBoxZ">0</span>
+                            </p>
+                        </div>
+                        <div class="bg-zinc-800 border border-zinc-700 rounded-lg p-3">
+                            <p class="text-zinc-400 mb-2">Machine Time</p>
+                            <p class="font-mono text-amber-500 font-bold text-sm"><span id="statMachineTime">0</span>s</p>
+                        </div>
+                        <div class="bg-zinc-800 border border-zinc-700 rounded-lg p-3">
+                            <p class="text-zinc-400 mb-2">Commands</p>
+                            <p class="text-zinc-300"><span id="statCommands">0</span> lines, <span id="statValid">0</span> valid</p>
+                        </div>
+                        <div class="bg-zinc-800 border border-zinc-700 rounded-lg p-3">
+                            <p class="text-zinc-400 mb-2">Tool Changes</p>
+                            <p class="font-mono text-green-400 font-bold text-sm"><span id="statToolChanges">0</span></p>
+                        </div>
+                        <div class="bg-zinc-800 border border-zinc-700 rounded-lg p-3">
+                            <p class="text-zinc-400 mb-2">Feed Rate Range</p>
+                            <p class="text-zinc-300 text-xs"><span id="statFeedMin">0</span> - <span id="statFeedMax">0</span> mm/min</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Example Modal -->
+    <div id="exampleModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-zinc-900 border border-zinc-700 rounded-lg p-6 max-w-lg max-h-96 overflow-y-auto">
+            <h2 class="font-mono font-bold text-amber-500 text-lg mb-4">SELECT EXAMPLE</h2>
+            <div class="space-y-2">
+                <button class="example-item w-full text-left bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg p-4 transition-colors" data-example="rectangle">
+                    <p class="font-mono font-bold text-amber-500">Rectangle Pocket</p>
+                    <p class="text-zinc-400 text-sm mt-1">Simple rectangular pocket milled to depth</p>
+                </button>
+                <button class="example-item w-full text-left bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg p-4 transition-colors" data-example="circle">
+                    <p class="font-mono font-bold text-amber-500">Circle & Drilling</p>
+                    <p class="text-zinc-400 text-sm mt-1">Circular pocket with drilling pattern</p>
+                </button>
+                <button class="example-item w-full text-left bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg p-4 transition-colors" data-example="contour">
+                    <p class="font-mono font-bold text-amber-500">Contour with Arcs</p>
+                    <p class="text-zinc-400 text-sm mt-1">Complex contour using arc interpolation</p>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============ GLOBAL STATE ============
+        const state = {
+            gcode: [],
+            moves: [],
+            currentLine: 0,
+            isPlaying: false,
+            isPaused: false,
+            speed: 1,
+            toolDiameter: 3.175,
+            units: 'mm',
+            currentX: 0,
+            currentY: 0,
+            currentZ: 0,
+            currentF: 0,
+            currentS: 0,
+            currentT: 0,
+            feedMode: 'absolute', // absolute or incremental
+            plane: 'XY', // XY, XZ, YZ
+            offsetX: 0,
+            offsetY: 0,
+            offsetZ: 0,
+            bounds: { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 },
+            stats: {
+                totalDist: 0,
+                cutDist: 0,
+                rapidDist: 0,
+                toolChanges: 0,
+                machineTime: 0,
+                feedMin: 0,
+                feedMax: 0,
+                validCommands: 0
+            }
+        };
+
+        const canvas2d = document.getElementById('canvas2d');
+        const canvas3d = document.getElementById('canvas3d');
+        const ctx2d = canvas2d.getContext('2d');
+        const ctx3d = canvas3d.getContext('2d');
+        const gcodeInput = document.getElementById('gcodeInput');
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+
+        // ============ G-CODE PARSER ============
+        class GCodeParser {
+            constructor() {
+                this.units = 'mm';
+                this.feedMode = 'absolute';
+                this.plane = 'XY';
+                this.spindle = false;
+                this.spindleDir = 1; // 1 = CW, -1 = CCW
+                this.positions = { x: 0, y: 0, z: 0, a: 0, b: 0, c: 0 };
+                this.offsets = { x: 0, y: 0, z: 0 };
+                this.feedRate = 0;
+                this.spindleSpeed = 0;
+                this.tool = 0;
+                this.moves = [];
+            }
+
+            parse(gcodeText) {
+                const lines = gcodeText.split('\n');
+                this.moves = [];
+                let lineNum = 0;
+
+                for (let line of lines) {
+                    lineNum++;
+                    // Remove comments
+                    let code = line.split(/[;(]/)[0].trim();
+                    if (!code) continue;
+
+                    const move = { line: lineNum, type: null, command: code };
+                    
+                    const commands = this.parseLineCommands(code);
+                    if (!commands.length) continue;
+
+                    // Process commands
+                    for (let cmd of commands) {
+                        this.processCommand(cmd, move);
+                    }
+
+                    if (move.type) {
+                        this.moves.push(move);
+                    }
+                }
+
+                return this.moves;
+            }
+
+            parseLineCommands(line) {
+                const commands = [];
+                const tokens = line.match(/[GgMm]\d+\.?\d*|[XYZIJKFSTPQ][-+]?\d+\.?\d*|[ABCDHLOPQR][-+]?\d+\.?\d*/gi) || [];
+                return tokens;
+            }
+
+            processCommand(cmd, move) {
+                const letter = cmd[0].toUpperCase();
+                const value = parseFloat(cmd.slice(1));
+
+                switch (letter) {
+                    case 'G':
+                        this.processGCode(value, move);
+                        break;
+                    case 'M':
+                        this.processMCode(value, move);
+                        break;
+                    case 'X':
+                    case 'Y':
+                    case 'Z':
+                    case 'A':
+                    case 'B':
+                    case 'C':
+                        move[letter.toLowerCase()] = value;
+                        break;
+                    case 'F':
+                        this.feedRate = value;
+                        move.feedRate = value;
+                        break;
+                    case 'S':
+                        this.spindleSpeed = value;
+                        move.spindleSpeed = value;
+                        break;
+                    case 'T':
+                        this.tool = Math.floor(value);
+                        move.tool = this.tool;
+                        break;
+                    case 'I':
+                    case 'J':
+                    case 'K':
+                        move[letter.toLowerCase()] = value;
+                        break;
+                    case 'R':
+                        move.r = value;
+                        break;
+                }
+            }
+
+            processGCode(value, move) {
+                const code = Math.floor(value);
+                const dec = (value * 10) % 10;
+
+                switch (code) {
+                    case 0: // Rapid
+                        move.type = 'rapid';
+                        move.rapid = true;
+                        break;
+                    case 1: // Linear interpolation
+                        move.type = 'linear';
+                        move.rapid = false;
+                        break;
+                    case 2: // CW arc
+                        move.type = 'arc';
+                        move.arcDir = -1;
+                        break;
+                    case 3: // CCW arc
+                        move.type = 'arc';
+                        move.arcDir = 1;
+                        break;
+                    case 17: // XY plane
+                        this.plane = 'XY';
+                        break;
+                    case 18: // XZ plane
+                        this.plane = 'XZ';
+                        break;
+                    case 19: // YZ plane
+                        this.plane = 'YZ';
+                        break;
+                    case 20: // Inch
+                        this.units = 'in';
+                        break;
+                    case 21: // Metric
+                        this.units = 'mm';
+                        break;
+                    case 28: // Home
+                        move.type = 'home';
+                        this.positions = { x: 0, y: 0, z: 0, a: 0, b: 0, c: 0 };
+                        break;
+                    case 40: // Cutter compensation off
+                        move.toolComp = 'off';
+                        break;
+                    case 41: // Cutter compensation left
+                        move.toolComp = 'left';
+                        break;
+                    case 42: // Cutter compensation right
+                        move.toolComp = 'right';
+                        break;
+                    case 90: // Absolute positioning
+                        this.feedMode = 'absolute';
+                        break;
+                    case 91: // Incremental positioning
+                        this.feedMode = 'incremental';
+                        break;
+                }
+                move.gcode = code;
+            }
+
+            processMCode(value, move) {
+                const code = Math.floor(value);
+                switch (code) {
+                    case 3: // Spindle on CW
+                        this.spindle = true;
+                        this.spindleDir = 1;
+                        move.type = 'spindle';
+                        move.spindle = 'on';
+                        move.spindleDir = 1;
+                        break;
+                    case 4: // Spindle on CCW
+                        this.spindle = true;
+                        this.spindleDir = -1;
+                        move.type = 'spindle';
+                        move.spindle = 'on';
+                        move.spindleDir = -1;
+                        break;
+                    case 5: // Spindle off
+                        this.spindle = false;
+                        move.type = 'spindle';
+                        move.spindle = 'off';
+                        break;
+                    case 6: // Tool change
+                        move.type = 'toolchange';
+                        break;
+                    case 30: // Program end
+                        move.type = 'end';
+                        break;
+                }
+                move.mcode = code;
+            }
+        }
+
+        // ============ MOVE PROCESSOR ============
+        function processMovesForVisualization(gcodeLines) {
+            const parser = new GCodeParser();
+            const rawMoves = parser.parse(gcodeLines);
+            
+            state.gcode = rawMoves;
+            const moves = [];
+            let x = 0, y = 0, z = 0;
+            let feedRate = 0, spindleSpeed = 0, tool = 0;
+            let feedMin = Infinity, feedMax = 0;
+            let totalDist = 0, cutDist = 0, rapidDist = 0;
+            let toolChanges = 0, machineTime = 0;
+            
+            state.bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+            
+            for (let move of rawMoves) {
+                if (!move.type) continue;
+                
+                const processedMove = {
+                    ...move,
+                    startX: x,
+                    startY: y,
+                    startZ: z,
+                    feedRate: feedRate,
+                    spindleSpeed: spindleSpeed,
+                    tool: tool
+                };
+
+                // Extract target position
+                let newX = ('x' in move) ? move.x : x;
+                let newY = ('y' in move) ? move.y : y;
+                let newZ = ('z' in move) ? move.z : z;
+
+                // Handle incremental mode
+                if (parser.feedMode === 'incremental' && move.type !== 'home') {
+                    newX = x + (('x' in move) ? move.x : 0);
+                    newY = y + (('y' in move) ? move.y : 0);
+                    newZ = z + (('z' in move) ? move.z : 0);
+                }
+
+                if (move.feedRate) feedRate = move.feedRate;
+                if (move.spindleSpeed) spindleSpeed = move.spindleSpeed;
+                if (move.tool) tool = move.tool;
+
+                processedMove.endX = newX;
+                processedMove.endY = newY;
+                processedMove.endZ = newZ;
+
+                // Calculate distance
+                if (move.type === 'linear' || move.type === 'rapid') {
+                    const dx = newX - x;
+                    const dy = newY - y;
+                    const dz = newZ - z;
+                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    
+                    totalDist += dist;
+                    if (move.type === 'rapid') {
+                        rapidDist += dist;
+                    } else {
+                        cutDist += dist;
+                        if (feedRate) {
+                            machineTime += (dist / feedRate) * 60; // seconds
+                        }
+                    }
+
+                    if (feedRate && feedRate > 0) {
+                        feedMin = Math.min(feedMin, feedRate);
+                        feedMax = Math.max(feedMax, feedRate);
+                    }
+                } else if (move.type === 'arc') {
+                    // Arc distance calculation (simplified)
+                    const dist = calculateArcLength(x, y, newX, newY, move.i || 0, move.j || 0, move.r);
+                    totalDist += dist;
+                    cutDist += dist;
+                    if (feedRate && feedRate > 0) {
+                        machineTime += (dist / feedRate) * 60;
+                        feedMin = Math.min(feedMin, feedRate);
+                        feedMax = Math.max(feedMax, feedRate);
+                    }
+                    processedMove.arcLength = dist;
+                } else if (move.type === 'toolchange') {
+                    toolChanges++;
+                }
+
+                // Update bounds
+                state.bounds.minX = Math.min(state.bounds.minX, newX);
+                state.bounds.maxX = Math.max(state.bounds.maxX, newX);
+                state.bounds.minY = Math.min(state.bounds.minY, newY);
+                state.bounds.maxY = Math.max(state.bounds.maxY, newY);
+                state.bounds.minZ = Math.min(state.bounds.minZ, newZ);
+                state.bounds.maxZ = Math.max(state.bounds.maxZ, newZ);
+
+                x = newX;
+                y = newY;
+                z = newZ;
+
+                if (move.type && ['linear', 'rapid', 'arc'].includes(move.type)) {
+                    moves.push(processedMove);
+                }
+            }
+
+            state.moves = moves;
+            state.stats = {
+                totalDist: totalDist,
+                cutDist: cutDist,
+                rapidDist: rapidDist,
+                toolChanges: toolChanges,
+                machineTime: Math.round(machineTime),
+                feedMin: feedMin === Infinity ? 0 : Math.round(feedMin),
+                feedMax: feedMax,
+                validCommands: rawMoves.filter(m => m.type).length
+            };
+
+            return moves;
+        }
+
+        function calculateArcLength(x1, y1, x2, y2, i, j, r) {
+            if (r) {
+                // R format
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                const d = Math.sqrt(dx*dx + dy*dy) / 2;
+                if (Math.abs(r) < d) return Math.hypot(dx, dy);
+                
+                const h = Math.sqrt(r*r - d*d);
+                const angle = 2 * Math.asin(d / Math.abs(r));
+                return Math.abs(r) * angle;
+            } else {
+                // I, J format
+                const cx = x1 + i;
+                const cy = y1 + j;
+                const r1 = Math.hypot(x1 - cx, y1 - cy);
+                const r2 = Math.hypot(x2 - cx, y2 - cy);
+                const angle1 = Math.atan2(y1 - cy, x1 - cx);
+                const angle2 = Math.atan2(y2 - cy, x2 - cx);
+                
+                let angleDiff = angle2 - angle1;
+                if (angleDiff < 0) angleDiff += 2 * Math.PI;
+                if (angleDiff > Math.PI) angleDiff = 2 * Math.PI - angleDiff;
+                
+                return ((r1 + r2) / 2) * angleDiff;
+            }
+        }
+
+        // ============ CANVAS RENDERING ============
+        class Canvas2DRenderer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.panX = 0;
+                this.panY = 0;
+                this.zoom = 1;
+                this.setup();
+            }
+
+            setup() {
+                this.canvas.width = this.canvas.offsetWidth;
+                this.canvas.height = this.canvas.offsetHeight;
+                
+                this.canvas.addEventListener('wheel', (e) => this.handleZoom(e));
+                this.canvas.addEventListener('mousedown', (e) => this.handlePan(e));
+            }
+
+            handleZoom(e) {
+                e.preventDefault();
+                const factor = e.deltaY > 0 ? 0.9 : 1.1;
+                this.zoom *= factor;
+                this.zoom = Math.max(0.1, Math.min(this.zoom, 100));
+                this.render();
+            }
+
+            handlePan(e) {
+                let lastX = e.clientX;
+                let lastY = e.clientY;
+                const mouseMoveHandler = (e) => {
+                    this.panX += e.clientX - lastX;
+                    this.panY += e.clientY - lastY;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    this.render();
+                };
+                const mouseUpHandler = () => {
+                    document.removeEventListener('mousemove', mouseMoveHandler);
+                    document.removeEventListener('mouseup', mouseUpHandler);
+                };
+                document.addEventListener('mousemove', mouseMoveHandler);
+                document.addEventListener('mouseup', mouseUpHandler);
+            }
+
+            render() {
+                const ctx = this.ctx;
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                
+                // Clear
+                ctx.fillStyle = '#27272a';
+                ctx.fillRect(0, 0, w, h);
+                
+                ctx.save();
+                ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
+                ctx.scale(this.zoom, this.zoom);
+                
+                // Grid
+                this.drawGrid(ctx);
+                
+                // Origin
+                ctx.fillStyle = '#f59e0b';
+                ctx.beginPath();
+                ctx.arc(0, 0, 2, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                // Moves
+                this.drawMoves(ctx);
+                
+                // Current position
+                if (state.moves.length > 0 && state.currentLine < state.moves.length) {
+                    const move = state.moves[state.currentLine];
+                    ctx.strokeStyle = '#06b6d4';
+                    ctx.fillStyle = 'rgba(6, 182, 212, 0.2)';
+                    const toolR = state.toolDiameter / 2;
+                    ctx.beginPath();
+                    ctx.arc(move.endX, move.endY, toolR, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                    
+                    // Crosshair
+                    ctx.strokeStyle = '#06b6d4';
+                    ctx.lineWidth = 0.5;
+                    ctx.beginPath();
+                    ctx.moveTo(move.endX - 5, move.endY);
+                    ctx.lineTo(move.endX + 5, move.endY);
+                    ctx.moveTo(move.endX, move.endY - 5);
+                    ctx.lineTo(move.endX, move.endY + 5);
+                    ctx.stroke();
+                }
+                
+                // Bounding box
+                this.drawBoundingBox(ctx);
+                
+                ctx.restore();
+            }
+
+            drawGrid(ctx) {
+                const gridSize = 10;
+                const bounds = state.bounds;
+                const width = bounds.maxX - bounds.minX || 100;
+                const height = bounds.maxY - bounds.minY || 100;
+                const minX = bounds.minX - width * 0.1;
+                const maxX = bounds.maxX + width * 0.1;
+                const minY = bounds.minY - height * 0.1;
+                const maxY = bounds.maxY + height * 0.1;
+                
+                // Minor grid
+                ctx.strokeStyle = '#52525b';
+                ctx.lineWidth = 0.3;
+                for (let x = Math.floor(minX / gridSize) * gridSize; x <= maxX; x += gridSize) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, minY);
+                    ctx.lineTo(x, maxY);
+                    ctx.stroke();
+                }
+                for (let y = Math.floor(minY / gridSize) * gridSize; y <= maxY; y += gridSize) {
+                    ctx.beginPath();
+                    ctx.moveTo(minX, y);
+                    ctx.lineTo(maxX, y);
+                    ctx.stroke();
+                }
+                
+                // Major grid
+                ctx.strokeStyle = '#71717a';
+                ctx.lineWidth = 0.5;
+                const majorGrid = gridSize * 5;
+                for (let x = Math.floor(minX / majorGrid) * majorGrid; x <= maxX; x += majorGrid) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, minY);
+                    ctx.lineTo(x, maxY);
+                    ctx.stroke();
+                }
+                for (let y = Math.floor(minY / majorGrid) * majorGrid; y <= maxY; y += majorGrid) {
+                    ctx.beginPath();
+                    ctx.moveTo(minX, y);
+                    ctx.lineTo(maxX, y);
+                    ctx.stroke();
+                }
+            }
+
+            drawMoves(ctx) {
+                for (let i = 0; i < state.moves.length; i++) {
+                    const move = state.moves[i];
+                    const isCurrentOrPassed = i <= state.currentLine;
+                    
+                    if (move.type === 'rapid') {
+                        ctx.strokeStyle = '#ef4444';
+                        ctx.setLineDash([3, 3]);
+                        ctx.lineWidth = 1;
+                    } else if (move.type === 'linear') {
+                        const depth = move.endZ - state.bounds.minZ;
+                        const maxDepth = state.bounds.maxZ - state.bounds.minZ || 1;
+                        const ratio = Math.max(0, Math.min(1, depth / maxDepth));
+                        if (ratio < 0.3) {
+                            ctx.strokeStyle = '#06b6d4';
+                        } else if (ratio < 0.7) {
+                            ctx.strokeStyle = '#f59e0b';
+                        } else {
+                            ctx.strokeStyle = '#22c55e';
+                        }
+                        ctx.setLineDash([]);
+                        ctx.lineWidth = isCurrentOrPassed ? 2 : 1;
+                    } else if (move.type === 'arc') {
+                        ctx.strokeStyle = '#06b6d4';
+                        ctx.setLineDash([]);
+                        ctx.lineWidth = isCurrentOrPassed ? 2 : 1;
+                    }
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(move.startX, move.startY);
+                    
+                    if (move.type === 'arc') {
+                        this.drawArc(ctx, move);
+                    } else {
+                        ctx.lineTo(move.endX, move.endY);
+                    }
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+
+            drawArc(ctx, move) {
+                const x1 = move.startX, y1 = move.startY;
+                const x2 = move.endX, y2 = move.endY;
+                let cx, cy, r;
+                
+                if (move.r) {
+                    // R format
+                    const dx = x2 - x1;
+                    const dy = y2 - y1;
+                    const d = Math.sqrt(dx*dx + dy*dy) / 2;
+                    r = Math.abs(move.r);
+                    if (r >= d) {
+                        const h = Math.sqrt(r*r - d*d);
+                        const px = (x1 + x2) / 2;
+                        const py = (y1 + y2) / 2;
+                        const perpX = -dy / (2*d);
+                        const perpY = dx / (2*d);
+                        
+                        if (move.arcDir > 0) {
+                            cx = px + perpX * h;
+                            cy = py + perpY * h;
+                        } else {
+                            cx = px - perpX * h;
+                            cy = py - perpY * h;
+                        }
+                    } else {
+                        ctx.lineTo(x2, y2);
+                        return;
+                    }
+                } else {
+                    // I, J format
+                    cx = x1 + (move.i || 0);
+                    cy = y1 + (move.j || 0);
+                    r = Math.hypot(x1 - cx, y1 - cy);
+                }
+                
+                const angle1 = Math.atan2(y1 - cy, x1 - cx);
+                const angle2 = Math.atan2(y2 - cy, x2 - cx);
+                
+                ctx.arc(cx, cy, r, angle1, angle2, move.arcDir < 0);
+            }
+
+            drawBoundingBox(ctx) {
+                const bounds = state.bounds;
+                const w = bounds.maxX - bounds.minX;
+                const h = bounds.maxY - bounds.minY;
+                
+                ctx.strokeStyle = 'rgba(245, 158, 11, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(bounds.minX, bounds.minY, w, h);
+                
+                // Dimensions text
+                ctx.fillStyle = '#a3a3a5';
+                ctx.font = '10px monospace';
+                ctx.fillText(`${w.toFixed(1)} mm`, bounds.minX, bounds.minY - 5);
+                ctx.fillText(`${h.toFixed(1)} mm`, bounds.maxX + 5, bounds.minY);
+            }
+        }
+
+        class Canvas3DRenderer {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.rotX = 0.5;
+                this.rotZ = 0.5;
+                this.zoom = 1;
+                this.panX = 0;
+                this.panY = 0;
+                this.setup();
+            }
+
+            setup() {
+                this.canvas.width = this.canvas.offsetWidth;
+                this.canvas.height = this.canvas.offsetHeight;
+                
+                this.canvas.addEventListener('wheel', (e) => this.handleZoom(e));
+                this.canvas.addEventListener('mousedown', (e) => this.handleRotate(e));
+            }
+
+            handleZoom(e) {
+                e.preventDefault();
+                const factor = e.deltaY > 0 ? 0.9 : 1.1;
+                this.zoom *= factor;
+                this.zoom = Math.max(0.1, Math.min(this.zoom, 100));
+                this.render();
+            }
+
+            handleRotate(e) {
+                let lastX = e.clientX;
+                let lastY = e.clientY;
+                const mouseMoveHandler = (e) => {
+                    this.rotZ += (e.clientX - lastX) * 0.01;
+                    this.rotX += (e.clientY - lastY) * 0.01;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    this.render();
+                };
+                const mouseUpHandler = () => {
+                    document.removeEventListener('mousemove', mouseMoveHandler);
+                    document.removeEventListener('mouseup', mouseUpHandler);
+                };
+                document.addEventListener('mousemove', mouseMoveHandler);
+                document.addEventListener('mouseup', mouseUpHandler);
+            }
+
+            project(x, y, z) {
+                // Simple isometric projection
+                const cosX = Math.cos(this.rotX);
+                const sinX = Math.sin(this.rotX);
+                const cosZ = Math.cos(this.rotZ);
+                const sinZ = Math.sin(this.rotZ);
+                
+                let rx = x * cosZ - y * sinZ;
+                let ry = (x * sinZ + y * cosZ) * cosX - z * sinX;
+                let rz = (x * sinZ + y * cosZ) * sinX + z * cosX;
+                
+                return {
+                    x: rx * this.zoom,
+                    y: ry * this.zoom,
+                    z: rz,
+                    depth: rz
+                };
+            }
+
+            render() {
+                const ctx = this.ctx;
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                
+                ctx.fillStyle = '#27272a';
+                ctx.fillRect(0, 0, w, h);
+                
+                ctx.save();
+                ctx.translate(w / 2, h / 2);
+                
+                // Draw bounds
+                this.drawBounds(ctx);
+                
+                // Draw moves
+                const segments = [];
+                for (let move of state.moves) {
+                    if (['linear', 'arc'].includes(move.type)) {
+                        const depth = move.endZ - state.bounds.minZ;
+                        const maxDepth = state.bounds.maxZ - state.bounds.minZ || 1;
+                        const ratio = Math.max(0, Math.min(1, depth / maxDepth));
+                        const color = this.depthToColor(ratio);
+                        
+                        segments.push({
+                            x1: move.startX, y1: move.startY, z1: move.startZ,
+                            x2: move.endX, y2: move.endY, z2: move.endZ,
+                            color: color,
+                            depth: Math.max(move.startZ, move.endZ)
+                        });
+                    }
+                }
+                
+                // Sort by depth
+                segments.sort((a, b) => a.depth - b.depth);
+                
+                for (let seg of segments) {
+                    const p1 = this.project(seg.x1, seg.y1, seg.z1);
+                    const p2 = this.project(seg.x2, seg.y2, seg.z2);
+                    
+                    ctx.strokeStyle = seg.color;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.stroke();
+                }
+                
+                ctx.restore();
+            }
+
+            drawBounds(ctx) {
+                const b = state.bounds;
+                const corners = [
+                    [b.minX, b.minY, b.minZ],
+                    [b.maxX, b.minY, b.minZ],
+                    [b.maxX, b.maxY, b.minZ],
+                    [b.minX, b.maxY, b.minZ],
+                    [b.minX, b.minY, b.maxZ],
+                    [b.maxX, b.minY, b.maxZ],
+                    [b.maxX, b.maxY, b.maxZ],
+                    [b.minX, b.maxY, b.maxZ],
+                ];
+                
+                ctx.strokeStyle = 'rgba(113, 113, 122, 0.3)';
+                ctx.lineWidth = 0.5;
+                
+                const edges = [
+                    [0, 1], [1, 2], [2, 3], [3, 0],
+                    [4, 5], [5, 6], [6, 7], [7, 4],
+                    [0, 4], [1, 5], [2, 6], [3, 7]
+                ];
+                
+                for (let [i, j] of edges) {
+                    const p1 = this.project(...corners[i]);
+                    const p2 = this.project(...corners[j]);
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x, p1.y);
+                    ctx.lineTo(p2.x, p2.y);
+                    ctx.stroke();
+                }
+            }
+
+            depthToColor(ratio) {
+                const hue = 240 - ratio * 120;
+                return `hsl(${hue}, 100%, 50%)`;
+            }
+        }
+
+        // ============ EVENT HANDLERS ============
+        function handleParse() {
+            const text = gcodeInput.value;
+            if (!text.trim()) {
+                alert('Please paste G-code or upload a file');
+                return;
+            }
+            
+            processMovesForVisualization(text);
+            updateStats();
+            showCanvas('2d');
+            resetSimulation();
+            render2d();
+            
+            document.getElementById('noCanvas').classList.add('hidden');
+            canvas2d.classList.remove('hidden');
+            canvas3d.classList.add('hidden');
+        }
+
+        function handleSpeedChange(value) {
+            state.speed = parseInt(value);
+            document.getElementById('speedValue').textContent = state.speed + 'x';
+        }
+
+        function handleToolDiameterChange(value) {
+            state.toolDiameter = parseFloat(value);
+            if (state.moves.length > 0) render2d();
+        }
+
+        function resetSimulation() {
+            state.currentLine = 0;
+            state.isPlaying = false;
+            state.isPaused = false;
+            updateDisplay();
+            updateProgress();
+        }
+
+        function playSimulation() {
+            if (state.moves.length === 0) return;
+            state.isPlaying = true;
+            state.isPaused = false;
+            document.getElementById('playBtn').disabled = true;
+            animate();
+        }
+
+        function pauseSimulation() {
+            state.isPlaying = false;
+            state.isPaused = true;
+        }
+
+        function stopSimulation() {
+            state.isPlaying = false;
+            state.isPaused = false;
+            state.currentLine = 0;
+            updateDisplay();
+            updateProgress();
+            render2d();
+        }
+
+        function stepForward() {
+            if (state.currentLine < state.moves.length - 1) {
+                state.currentLine++;
+                updateDisplay();
+                updateProgress();
+                render2d();
+            }
+        }
+
+        function stepBackward() {
+            if (state.currentLine > 0) {
+                state.currentLine--;
+                updateDisplay();
+                updateProgress();
+                render2d();
+            }
+        }
+
+        let lastAnimTime = 0;
+        function animate() {
+            if (!state.isPlaying) {
+                document.getElementById('playBtn').disabled = false;
+                return;
+            }
+            
+            const now = performance.now();
+            if (lastAnimTime === 0) lastAnimTime = now;
+            
+            const deltaTime = now - lastAnimTime;
+            const step = Math.max(1, Math.floor(deltaTime / (16.67 / state.speed)));
+            lastAnimTime = now;
+            
+            state.currentLine = Math.min(state.currentLine + step, state.moves.length - 1);
+            updateDisplay();
+            updateProgress();
+            render2d();
+            
+            if (state.currentLine >= state.moves.length - 1) {
+                state.isPlaying = false;
+                document.getElementById('playBtn').disabled = false;
+                lastAnimTime = 0;
+            } else {
+                requestAnimationFrame(animate);
+            }
+        }
+
+        function updateDisplay() {
+            if (state.currentLine >= 0 && state.currentLine < state.moves.length) {
+                const move = state.moves[state.currentLine];
+                state.currentX = move.endX;
+                state.currentY = move.endY;
+                state.currentZ = move.endZ;
+                if (move.feedRate) state.currentF = move.feedRate;
+                if (move.spindleSpeed) state.currentS = move.spindleSpeed;
+                if (move.tool) state.currentT = move.tool;
+            }
+            
+            document.getElementById('displayX').textContent = state.currentX.toFixed(3);
+            document.getElementById('displayY').textContent = state.currentY.toFixed(3);
+            document.getElementById('displayZ').textContent = state.currentZ.toFixed(3);
+            document.getElementById('displayF').textContent = Math.round(state.currentF);
+            document.getElementById('displayS').textContent = Math.round(state.currentS);
+            document.getElementById('displayT').textContent = Math.round(state.currentT);
+        }
+
+        function updateProgress() {
+            const total = state.moves.length || 1;
+            const percent = (state.currentLine / total) * 100;
+            document.getElementById('progressBar').style.width = percent + '%';
+            document.getElementById('progressText').textContent = state.currentLine + '/' + total;
+        }
+
+        function updateStats() {
+            document.getElementById('statTotalDist').textContent = state.stats.totalDist.toFixed(2);
+            document.getElementById('statCutDist').textContent = state.stats.cutDist.toFixed(2);
+            document.getElementById('statRapidDist').textContent = state.stats.rapidDist.toFixed(2);
+            document.getElementById('statBBoxX').textContent = (state.bounds.maxX - state.bounds.minX).toFixed(1);
+            document.getElementById('statBBoxY').textContent = (state.bounds.maxY - state.bounds.minY).toFixed(1);
+            document.getElementById('statBBoxZ').textContent = (state.bounds.maxZ - state.bounds.minZ).toFixed(1);
+            document.getElementById('statMachineTime').textContent = state.stats.machineTime;
+            document.getElementById('statCommands').textContent = state.gcode.length;
+            document.getElementById('statValid').textContent = state.stats.validCommands;
+            document.getElementById('statToolChanges').textContent = state.stats.toolChanges;
+            document.getElementById('statFeedMin').textContent = state.stats.feedMin;
+            document.getElementById('statFeedMax').textContent = Math.round(state.stats.feedMax);
+        }
+
+        function showCanvas(type) {
+            canvas2d.classList.toggle('hidden', type !== '2d');
+            canvas3d.classList.toggle('hidden', type !== '3d');
+            
+            document.querySelectorAll('[data-view]').forEach(btn => {
+                btn.classList.toggle('tab-active', btn.dataset.view === type);
+                btn.classList.toggle('tab-inactive', btn.dataset.view !== type);
+            });
+            
+            setTimeout(() => {
+                canvas2d.width = canvas2d.offsetWidth;
+                canvas2d.height = canvas2d.offsetHeight;
+                canvas3d.width = canvas3d.offsetWidth;
+                canvas3d.height = canvas3d.offsetHeight;
+                
+                if (type === '2d') render2d();
+                else render3d();
+            }, 0);
+        }
+
+        let renderer2d, renderer3d;
+        function render2d() {
+            if (!renderer2d) renderer2d = new Canvas2DRenderer(canvas2d);
+            renderer2d.render();
+        }
+
+        function render3d() {
+            if (!renderer3d) renderer3d = new Canvas3DRenderer(canvas3d);
+            renderer3d.render();
+        }
+
+        function exportGCode() {
+            if (state.gcode.length === 0) {
+                alert('No G-code to export');
+                return;
+            }
+            
+            const lines = state.gcode.map(m => m.command).filter(c => c);
+            const text = lines.join('\n');
+            const blob = new Blob([text], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'toolpath.gcode';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function showExamples() {
+            document.getElementById('exampleModal').classList.remove('hidden');
+        }
+
+        const examples = {
+            rectangle: `G21
+G17
+G90
+G28
+T1 M6
+M3 S1000
+G0 Z10
+G0 X10 Y10
+G1 Z-5 F100
+G1 X50 Y10 F50
+G1 X50 Y50 F50
+G1 X10 Y50 F50
+G1 X10 Y10 F50
+G0 Z10
+M5
+M30`,
+            circle: `G21
+G17
+G90
+G28
+T1 M6
+M3 S1200
+G0 Z10
+G0 X30 Y30
+G1 Z-3 F100
+G2 X30 Y30 I10 J0 F40
+G0 Z10
+T2 M6
+M3 S1500
+G0 X10 Y10
+G1 Z-5 F80
+G0 Z10
+G0 X50 Y50
+G1 Z-5 F80
+G0 Z10
+M5
+M30`,
+            contour: `G21
+G17
+G90
+G28
+T1 M6
+M3 S1000
+G0 Z10
+G0 X20 Y20
+G1 Z-3 F100
+G1 X40 Y20 F50
+G3 X60 Y40 I20 J0 F50
+G1 X60 Y60 F50
+G2 X40 Y80 I-10 J0 F50
+G1 X20 Y80 F50
+G1 X20 Y20 F50
+G0 Z10
+M5
+M30`
+        };
+
+        document.getElementById('exampleBtn').addEventListener('click', showExamples);
+        document.querySelectorAll('.example-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const key = btn.dataset.example;
+                gcodeInput.value = examples[key];
+                document.getElementById('exampleModal').classList.add('hidden');
+                handleParse();
+            });
+        });
+
+        document.getElementById('exampleModal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('exampleModal')) {
+                document.getElementById('exampleModal').classList.add('hidden');
+            }
+        });
+
+        // Tab navigation
+        document.querySelectorAll('[data-tab]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.tab;
+                document.getElementById('pasteTab').classList.toggle('hidden', tab !== 'paste');
+                document.getElementById('fileTab').classList.toggle('hidden', tab !== 'file');
+                
+                document.querySelectorAll('[data-tab]').forEach(b => {
+                    b.classList.toggle('tab-active', b.dataset.tab === tab);
+                    b.classList.toggle('tab-inactive', b.dataset.tab !== tab);
+                });
+            });
+        });
+
+        document.querySelectorAll('[data-view]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                showCanvas(btn.dataset.view);
+            });
+        });
+
+        // File upload
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#f59e0b';
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.style.borderColor = '#52525b';
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#52525b';
+            const file = e.dataTransfer.files[0];
+            if (file) handleFileUpload(file);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) handleFileUpload(file);
+        });
+
+        function handleFileUpload(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                gcodeInput.value = e.target.result;
+                handleParse();
+            };
+            reader.readAsText(file);
+        }
+
+        // Button events
+        document.getElementById('parseBtn').addEventListener('click', handleParse);
+        document.getElementById('playBtn').addEventListener('click', playSimulation);
+        document.getElementById('pauseBtn').addEventListener('click', pauseSimulation);
+        document.getElementById('stopBtn').addEventListener('click', stopSimulation);
+        document.getElementById('stepFwdBtn').addEventListener('click', stepForward);
+        document.getElementById('stepBackBtn').addEventListener('click', stepBackward);
+        document.getElementById('speedSlider').addEventListener('input', (e) => handleSpeedChange(e.target.value));
+        document.getElementById('toolDiameter').addEventListener('input', (e) => handleToolDiameterChange(e.target.value));
+        document.getElementById('exportBtn').addEventListener('click', exportGCode);
+
+        // Initialize
+        window.addEventListener('resize', () => {
+            if (!canvas2d.classList.contains('hidden')) render2d();
+            if (!canvas3d.classList.contains('hidden')) render3d();
+        });
+
+        // PWA Service Worker
+        if ('serviceWorker' in navigator) {
+            const swCode = `self.addEventListener('install', e => {
+                e.waitUntil(caches.open('gcode-viewer-v1').then(cache => {
+                    return cache.addAll(['/']);
+                }));
+            });
+            self.addEventListener('fetch', e => {
+                e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+            });`;
+            
+            const blob = new Blob([swCode], { type: 'application/javascript' });
+            const url = URL.createObjectURL(blob);
+            navigator.serviceWorker.register(url).catch(() => {});
+        }
+    </script>
+</body>
+</html>
