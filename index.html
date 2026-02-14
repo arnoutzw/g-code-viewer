@@ -795,15 +795,40 @@
                 document.addEventListener('mouseup', mouseUpHandler);
             }
 
+            zoomToFit() {
+                const bounds = state.bounds;
+                const bbWidth = bounds.maxX - bounds.minX;
+                const bbHeight = bounds.maxY - bounds.minY;
+
+                if (bbWidth === 0 && bbHeight === 0) return;
+
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                const padding = 0.85;
+
+                if (bbWidth === 0) {
+                    this.zoom = h * padding / bbHeight;
+                } else if (bbHeight === 0) {
+                    this.zoom = w * padding / bbWidth;
+                } else {
+                    this.zoom = Math.min(w * padding / bbWidth, h * padding / bbHeight);
+                }
+
+                const centerX = (bounds.minX + bounds.maxX) / 2;
+                const centerY = (bounds.minY + bounds.maxY) / 2;
+                this.panX = -centerX * this.zoom;
+                this.panY = -centerY * this.zoom;
+            }
+
             render() {
                 const ctx = this.ctx;
                 const w = this.canvas.width;
                 const h = this.canvas.height;
-                
+
                 // Clear
                 ctx.fillStyle = '#27272a';
                 ctx.fillRect(0, 0, w, h);
-                
+
                 ctx.save();
                 ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
                 ctx.scale(this.zoom, this.zoom);
@@ -1039,13 +1064,61 @@
                 document.addEventListener('mouseup', mouseUpHandler);
             }
 
+            zoomToFit() {
+                const b = state.bounds;
+                const corners = [
+                    [b.minX, b.minY, b.minZ],
+                    [b.maxX, b.minY, b.minZ],
+                    [b.maxX, b.maxY, b.minZ],
+                    [b.minX, b.maxY, b.minZ],
+                    [b.minX, b.minY, b.maxZ],
+                    [b.maxX, b.minY, b.maxZ],
+                    [b.maxX, b.maxY, b.maxZ],
+                    [b.minX, b.maxY, b.maxZ],
+                ];
+
+                // Calculate projected bounds at zoom=1
+                const savedZoom = this.zoom;
+                this.zoom = 1;
+
+                let minPX = Infinity, maxPX = -Infinity;
+                let minPY = Infinity, maxPY = -Infinity;
+
+                for (const [x, y, z] of corners) {
+                    const p = this.project(x, y, z);
+                    minPX = Math.min(minPX, p.x);
+                    maxPX = Math.max(maxPX, p.x);
+                    minPY = Math.min(minPY, p.y);
+                    maxPY = Math.max(maxPY, p.y);
+                }
+
+                this.zoom = savedZoom;
+
+                const projWidth = maxPX - minPX;
+                const projHeight = maxPY - minPY;
+
+                if (projWidth === 0 && projHeight === 0) return;
+
+                const w = this.canvas.width;
+                const h = this.canvas.height;
+                const padding = 0.85;
+
+                if (projWidth === 0) {
+                    this.zoom = h * padding / projHeight;
+                } else if (projHeight === 0) {
+                    this.zoom = w * padding / projWidth;
+                } else {
+                    this.zoom = Math.min(w * padding / projWidth, h * padding / projHeight);
+                }
+            }
+
             project(x, y, z) {
                 // Simple isometric projection
                 const cosX = Math.cos(this.rotX);
                 const sinX = Math.sin(this.rotX);
                 const cosZ = Math.cos(this.rotZ);
                 const sinZ = Math.sin(this.rotZ);
-                
+
                 let rx = x * cosZ - y * sinZ;
                 let ry = (x * sinZ + y * cosZ) * cosX - z * sinX;
                 let rz = (x * sinZ + y * cosZ) * sinX + z * cosX;
@@ -1156,6 +1229,8 @@
             
             processMovesForVisualization(text);
             updateStats();
+            needsZoomToFit2d = true;
+            needsZoomToFit3d = true;
             showCanvas('2d');
             resetSimulation();
             render2d();
@@ -1166,7 +1241,7 @@
         }
 
         function handleSpeedChange(value) {
-            state.speed = parseInt(value);
+            state.speed = Math.max(1, parseInt(value));
             document.getElementById('speedValue').textContent = state.speed + 'x';
         }
 
@@ -1313,13 +1388,22 @@
         }
 
         let renderer2d, renderer3d;
+        let needsZoomToFit2d = false, needsZoomToFit3d = false;
         function render2d() {
             if (!renderer2d) renderer2d = new Canvas2DRenderer(canvas2d);
+            if (needsZoomToFit2d && state.moves.length > 0) {
+                renderer2d.zoomToFit();
+                needsZoomToFit2d = false;
+            }
             renderer2d.render();
         }
 
         function render3d() {
             if (!renderer3d) renderer3d = new Canvas3DRenderer(canvas3d);
+            if (needsZoomToFit3d && state.moves.length > 0) {
+                renderer3d.zoomToFit();
+                needsZoomToFit3d = false;
+            }
             renderer3d.render();
         }
 
