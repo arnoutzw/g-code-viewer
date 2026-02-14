@@ -762,9 +762,15 @@
             }
 
             setup() {
-                this.canvas.width = this.canvas.offsetWidth;
-                this.canvas.height = this.canvas.offsetHeight;
-                
+                const dpr = window.devicePixelRatio || 1;
+                const w = this.canvas.offsetWidth;
+                const h = this.canvas.offsetHeight;
+                this.canvas.width = w * dpr;
+                this.canvas.height = h * dpr;
+                this.canvas.style.width = w + 'px';
+                this.canvas.style.height = h + 'px';
+                this.dpr = dpr;
+
                 this.canvas.addEventListener('wheel', (e) => this.handleZoom(e));
                 this.canvas.addEventListener('mousedown', (e) => this.handlePan(e));
             }
@@ -802,8 +808,9 @@
 
                 if (bbWidth === 0 && bbHeight === 0) return;
 
-                const w = this.canvas.width;
-                const h = this.canvas.height;
+                const dpr = this.dpr || 1;
+                const w = this.canvas.width / dpr;
+                const h = this.canvas.height / dpr;
                 const padding = 0.85;
 
                 if (bbWidth === 0) {
@@ -822,17 +829,19 @@
 
             render() {
                 const ctx = this.ctx;
-                const w = this.canvas.width;
-                const h = this.canvas.height;
+                const dpr = this.dpr || 1;
+                const w = this.canvas.width / dpr;
+                const h = this.canvas.height / dpr;
 
                 // Clear
+                ctx.save();
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 ctx.fillStyle = '#27272a';
                 ctx.fillRect(0, 0, w, h);
 
-                ctx.save();
                 ctx.translate(w / 2 + this.panX, h / 2 + this.panY);
                 ctx.scale(this.zoom, this.zoom);
-                
+
                 // Grid
                 this.drawGrid(ctx);
                 
@@ -1031,9 +1040,15 @@
             }
 
             setup() {
-                this.canvas.width = this.canvas.offsetWidth;
-                this.canvas.height = this.canvas.offsetHeight;
-                
+                const dpr = window.devicePixelRatio || 1;
+                const w = this.canvas.offsetWidth;
+                const h = this.canvas.offsetHeight;
+                this.canvas.width = w * dpr;
+                this.canvas.height = h * dpr;
+                this.canvas.style.width = w + 'px';
+                this.canvas.style.height = h + 'px';
+                this.dpr = dpr;
+
                 this.canvas.addEventListener('wheel', (e) => this.handleZoom(e));
                 this.canvas.addEventListener('mousedown', (e) => this.handleRotate(e));
             }
@@ -1099,8 +1114,9 @@
 
                 if (projWidth === 0 && projHeight === 0) return;
 
-                const w = this.canvas.width;
-                const h = this.canvas.height;
+                const dpr = this.dpr || 1;
+                const w = this.canvas.width / dpr;
+                const h = this.canvas.height / dpr;
                 const padding = 0.85;
 
                 if (projWidth === 0) {
@@ -1131,15 +1147,77 @@
                 };
             }
 
+            subdivideArc(move) {
+                const x1 = move.startX, y1 = move.startY, z1 = move.startZ;
+                const x2 = move.endX, y2 = move.endY, z2 = move.endZ;
+                let cx, cy, r;
+
+                if (move.r) {
+                    const dx = x2 - x1;
+                    const dy = y2 - y1;
+                    const d = Math.sqrt(dx * dx + dy * dy) / 2;
+                    r = Math.abs(move.r);
+                    if (r >= d) {
+                        const h = Math.sqrt(r * r - d * d);
+                        const px = (x1 + x2) / 2;
+                        const py = (y1 + y2) / 2;
+                        const perpX = -dy / (2 * d);
+                        const perpY = dx / (2 * d);
+                        if (move.arcDir > 0) {
+                            cx = px + perpX * h;
+                            cy = py + perpY * h;
+                        } else {
+                            cx = px - perpX * h;
+                            cy = py - perpY * h;
+                        }
+                    } else {
+                        return [{ x1, y1, z1, x2, y2, z2 }];
+                    }
+                } else {
+                    cx = x1 + (move.i || 0);
+                    cy = y1 + (move.j || 0);
+                    r = Math.hypot(x1 - cx, y1 - cy);
+                }
+
+                let angle1 = Math.atan2(y1 - cy, x1 - cx);
+                let angle2 = Math.atan2(y2 - cy, x2 - cx);
+                const ccw = move.arcDir > 0;
+
+                let sweep;
+                if (ccw) {
+                    sweep = angle2 - angle1;
+                    if (sweep <= 0) sweep += 2 * Math.PI;
+                } else {
+                    sweep = angle1 - angle2;
+                    if (sweep <= 0) sweep += 2 * Math.PI;
+                }
+
+                const numSegments = Math.max(8, Math.ceil(Math.abs(sweep) * r * 2));
+                const segs = [];
+                for (let i = 0; i < numSegments; i++) {
+                    const t0 = i / numSegments;
+                    const t1 = (i + 1) / numSegments;
+                    const a0 = ccw ? angle1 + sweep * t0 : angle1 - sweep * t0;
+                    const a1 = ccw ? angle1 + sweep * t1 : angle1 - sweep * t1;
+                    segs.push({
+                        x1: cx + r * Math.cos(a0), y1: cy + r * Math.sin(a0), z1: z1 + (z2 - z1) * t0,
+                        x2: cx + r * Math.cos(a1), y2: cy + r * Math.sin(a1), z2: z1 + (z2 - z1) * t1
+                    });
+                }
+                return segs;
+            }
+
             render() {
                 const ctx = this.ctx;
-                const w = this.canvas.width;
-                const h = this.canvas.height;
-                
+                const dpr = this.dpr || 1;
+                const w = this.canvas.width / dpr;
+                const h = this.canvas.height / dpr;
+
+                ctx.save();
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 ctx.fillStyle = '#27272a';
                 ctx.fillRect(0, 0, w, h);
-                
-                ctx.save();
+
                 ctx.translate(w / 2, h / 2);
                 
                 // Draw bounds
@@ -1153,13 +1231,25 @@
                         const maxDepth = state.bounds.maxZ - state.bounds.minZ || 1;
                         const ratio = Math.max(0, Math.min(1, depth / maxDepth));
                         const color = this.depthToColor(ratio);
-                        
-                        segments.push({
-                            x1: move.startX, y1: move.startY, z1: move.startZ,
-                            x2: move.endX, y2: move.endY, z2: move.endZ,
-                            color: color,
-                            depth: Math.max(move.startZ, move.endZ)
-                        });
+
+                        if (move.type === 'arc') {
+                            const arcSegs = this.subdivideArc(move);
+                            for (let s of arcSegs) {
+                                segments.push({
+                                    x1: s.x1, y1: s.y1, z1: s.z1,
+                                    x2: s.x2, y2: s.y2, z2: s.z2,
+                                    color: color,
+                                    depth: Math.max(s.z1, s.z2)
+                                });
+                            }
+                        } else {
+                            segments.push({
+                                x1: move.startX, y1: move.startY, z1: move.startZ,
+                                x2: move.endX, y2: move.endY, z2: move.endZ,
+                                color: color,
+                                depth: Math.max(move.startZ, move.endZ)
+                            });
+                        }
                     }
                 }
                 
@@ -1377,11 +1467,22 @@
             });
             
             setTimeout(() => {
-                canvas2d.width = canvas2d.offsetWidth;
-                canvas2d.height = canvas2d.offsetHeight;
-                canvas3d.width = canvas3d.offsetWidth;
-                canvas3d.height = canvas3d.offsetHeight;
-                
+                const dpr = window.devicePixelRatio || 1;
+                const w2d = canvas2d.offsetWidth;
+                const h2d = canvas2d.offsetHeight;
+                const w3d = canvas3d.offsetWidth;
+                const h3d = canvas3d.offsetHeight;
+                canvas2d.width = w2d * dpr;
+                canvas2d.height = h2d * dpr;
+                canvas2d.style.width = w2d + 'px';
+                canvas2d.style.height = h2d + 'px';
+                canvas3d.width = w3d * dpr;
+                canvas3d.height = h3d * dpr;
+                canvas3d.style.width = w3d + 'px';
+                canvas3d.style.height = h3d + 'px';
+                if (renderer2d) renderer2d.dpr = dpr;
+                if (renderer3d) renderer3d.dpr = dpr;
+
                 if (type === '2d') render2d();
                 else render3d();
             }, 0);
