@@ -40,6 +40,21 @@ Simply open `index.html` in a modern web browser. No build tools or dependencies
 4. Inspect the toolpath before running on your CNC machine or 3D printer
 5. Verify machine movements and detect potential collisions
 
+
+## Theme Support
+
+The app supports two themes:
+
+- **Dark** (default) - Dark background with amber accents
+- **ASML Light** - Light theme following ASML corporate design (deep blue #10069f, cyan accents)
+
+When embedded in the Black Sphere Industries portal, theme changes are communicated via `postMessage`:
+
+```javascript
+// Sent to parent when theme changes
+window.parent.postMessage({ type: "theme-change", theme: "dark" | "asml" }, "*");
+```
+
 ## Browser Support
 
 Requires a modern browser with WebGL support (Chrome, Firefox, Edge, Safari)
