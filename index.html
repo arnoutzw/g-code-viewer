@@ -243,21 +243,21 @@
                     <h2 class="font-mono font-bold text-amber-500 text-sm mb-4">SIMULATION</h2>
                     <div class="flex gap-2 mb-4">
                         <button id="playBtn" class="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-900 font-mono font-bold px-3 py-2.5 rounded-lg transition-colors text-sm">
-                            ▶ Play
+                            â¶ Play
                         </button>
                         <button id="pauseBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2.5 rounded-lg transition-colors text-sm">
-                            ⏸ Pause
+                            â¸ Pause
                         </button>
                         <button id="stopBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2.5 rounded-lg transition-colors text-sm">
-                            ⏹ Stop
+                            â¹ Stop
                         </button>
                     </div>
                     <div class="flex gap-2 mb-4">
                         <button id="stepBackBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2 rounded-lg transition-colors text-sm">
-                            ◀ Step
+                            â Step
                         </button>
                         <button id="stepFwdBtn" class="flex-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 font-mono font-bold px-3 py-2 rounded-lg transition-colors text-sm">
-                            Step ▶
+                            Step â¶
                         </button>
                     </div>
                     <div class="mb-4">
@@ -330,8 +330,8 @@
                         <div class="bg-zinc-800 border border-zinc-700 rounded-lg p-3">
                             <p class="text-zinc-400 mb-2">Bounding Box</p>
                             <p class="font-mono text-cyan-400 font-bold text-xs">
-                                <span id="statBBoxX">0</span> × 
-                                <span id="statBBoxY">0</span> × 
+                                <span id="statBBoxX">0</span> Ã 
+                                <span id="statBBoxY">0</span> Ã 
                                 <span id="statBBoxZ">0</span>
                             </p>
                         </div>
@@ -1686,5 +1686,29 @@ M30`
             navigator.serviceWorker.register(url).catch(() => {});
         }
     </script>
+
+<script>
+// Theme change observer - signals to parent portal
+(function() {
+  var lastTheme = '';
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      if (m.attributeName === 'class' || m.attributeName === 'data-theme') {
+        var el = document.documentElement;
+        var isDark = el.classList.contains('dark') || el.getAttribute('data-theme') === 'dark';
+        var newTheme = isDark ? 'dark' : 'asml';
+        if (newTheme !== lastTheme) {
+          lastTheme = newTheme;
+          if (window.parent !== window) {
+            try { window.parent.postMessage({ type: 'theme-change', theme: newTheme }, '*'); } catch(e) {}
+          }
+        }
+      }
+    });
+  });
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+  if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+})();
+</script>
 </body>
 </html>
