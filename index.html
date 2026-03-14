@@ -1457,10 +1457,11 @@
             document.getElementById('statFeedMax').textContent = Math.round(state.stats.feedMax);
         }
 
-        function showCanvas(type) {
+        function showCanvas(type, skipHash) {
             canvas2d.classList.toggle('hidden', type !== '2d');
             canvas3d.classList.toggle('hidden', type !== '3d');
-            
+            if (!skipHash) history.replaceState(null, '', '#' + type);
+
             document.querySelectorAll('[data-view]').forEach(btn => {
                 btn.classList.toggle('tab-active', btn.dataset.view === type);
                 btn.classList.toggle('tab-inactive', btn.dataset.view !== type);
@@ -1668,6 +1669,15 @@ M30`
         window.addEventListener('resize', () => {
             if (!canvas2d.classList.contains('hidden')) render2d();
             if (!canvas3d.classList.contains('hidden')) render3d();
+        });
+
+        // Deep linking for view (2d/3d)
+        const _validGcodeViews = ['2d', '3d'];
+        const _initGcodeView = _validGcodeViews.includes(window.location.hash.slice(1)) ? window.location.hash.slice(1) : null;
+        if (_initGcodeView) showCanvas(_initGcodeView, true);
+        window.addEventListener('hashchange', () => {
+            const v = window.location.hash.slice(1);
+            if (_validGcodeViews.includes(v)) showCanvas(v, true);
         });
 
         // PWA Service Worker
