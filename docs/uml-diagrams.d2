@@ -1,0 +1,404 @@
+# ============================================================================
+# G-Code Viewer — UML Diagrams (D2)
+# Covers: G-code parsing, 2D/3D toolpath visualization, simulation playback
+# ============================================================================
+
+# ============================================================================
+# CLASSES
+# ============================================================================
+
+class-diagram: {
+  GCodeParser: GCodeParser {
+    shape: class
+    units: string
+    feedMode: string
+    plane: string
+    spindle: boolean
+    spindleDir: number
+    positions: {x, y, z, a, b, c}
+    offsets: {x, y, z}
+    feedRate: number
+    spindleSpeed: number
+    tool: number
+    moves: "Move[]"
+    parse(gcodeText)
+    parseLineCommands(line)
+    processCommand(cmd, move)
+    processGCode(value, move)
+    processMCode(value, move)
+  }
+
+  AppState: Global State {
+    shape: class
+    gcode: "Move[]"
+    moves: "ProcessedMove[]"
+    currentLine: number
+    isPlaying: boolean
+    isPaused: boolean
+    speed: number
+    toolDiameter: number
+    units: string
+    currentX: number
+    currentY: number
+    currentZ: number
+    currentF: number
+    currentS: number
+    currentT: number
+    feedMode: string
+    plane: string
+    bounds: BoundingBox
+    stats: Statistics
+  }
+
+  Canvas2DRenderer: Canvas2DRenderer {
+    shape: class
+    canvas: HTMLCanvasElement
+    ctx: CanvasRenderingContext2D
+    panX: number
+    panY: number
+    zoom: number
+    dpr: number
+    setup()
+    render()
+    drawGrid(ctx)
+    drawMoves(ctx)
+    drawArc(ctx, move)
+    drawBoundingBox(ctx)
+    handleZoom(event)
+    handlePan(event)
+    zoomToFit()
+  }
+
+  Canvas3DRenderer: Canvas3DRenderer {
+    shape: class
+    canvas: HTMLCanvasElement
+    ctx: CanvasRenderingContext2D
+    rotX: number
+    rotZ: number
+    zoom: number
+    panX: number
+    panY: number
+    setup()
+    render()
+    project(x, y, z)
+    subdivideArc(move)
+    handleZoom(event)
+    handleRotate(event)
+    zoomToFit()
+  }
+
+  Move: Move {
+    shape: class
+    line: number
+    type: string
+    command: string
+    gcode: number
+    mcode: number
+    x: number
+    y: number
+    z: number
+    i: number
+    j: number
+    k: number
+    r: number
+    feedRate: number
+    spindleSpeed: number
+    tool: number
+    rapid: boolean
+    arcDir: number
+    toolComp: string
+  }
+
+  ProcessedMove: ProcessedMove {
+    shape: class
+    startX: number
+    startY: number
+    startZ: number
+    endX: number
+    endY: number
+    endZ: number
+    type: string
+    feedRate: number
+    spindleSpeed: number
+    tool: number
+    arcLength: number
+  }
+
+  Statistics: Statistics {
+    shape: class
+    totalDist: number
+    cutDist: number
+    rapidDist: number
+    toolChanges: number
+    machineTime: number
+    feedMin: number
+    feedMax: number
+    validCommands: number
+  }
+
+  BoundingBox: BoundingBox {
+    shape: class
+    minX: number
+    maxX: number
+    minY: number
+    maxY: number
+    minZ: number
+    maxZ: number
+  }
+
+  # Relationships
+  GCodeParser -> Move: "produces"
+  AppState -> ProcessedMove: "stores"
+  AppState -> Statistics: "contains"
+  AppState -> BoundingBox: "contains"
+  Canvas2DRenderer -> AppState: "reads moves/bounds"
+  Canvas3DRenderer -> AppState: "reads moves/bounds"
+  Move -> ProcessedMove: "processed into"
+}
+
+# ============================================================================
+# SEQUENCE DIAGRAM — Main: G-Code Parse & Render Flow
+# ============================================================================
+
+seq-main: G-Code Parse and Render Flow {
+  shape: sequence_diagram
+
+  user: User
+  ui: Editor Panel
+  parser: GCodeParser
+  processor: processMovesForVisualization
+  state: AppState
+  r2d: Canvas2DRenderer
+  r3d: Canvas3DRenderer
+  stats: Statistics Display
+
+  user -> ui: "Paste G-code text into textarea"
+  user -> ui: "Click 'Parse & Render' button"
+  ui -> parser: "new GCodeParser()"
+  ui -> parser: "parser.parse(gcodeText)"
+  parser -> parser: "Split text into lines"
+  parser -> parser: "For each line: remove comments (;, parentheses)"
+  parser -> parser: "parseLineCommands(line) — regex tokenize G/M/X/Y/Z/F/S/T"
+  parser -> parser: "processCommand(token, move)"
+  parser -> parser: "processGCode: G0=rapid, G1=linear, G2/G3=arc CW/CCW"
+  parser -> parser: "processGCode: G17/18/19=plane, G20/21=units, G90/91=abs/inc"
+  parser -> parser: "processMCode: M3/4/5=spindle, M6=toolchange, M30=end"
+  parser -> parser: "Track positions, feedRate, spindleSpeed, tool state"
+  parser --> ui: "return moves[] (raw parsed)"
+  ui -> processor: "processMovesForVisualization(gcodeText)"
+  processor -> processor: "For each raw move: set startX/Y/Z from current position"
+  processor -> processor: "Handle incremental mode: newX = x + move.x"
+  processor -> processor: "Calculate linear distances: sqrt(dx^2+dy^2+dz^2)"
+  processor -> processor: "calculateArcLength() for arc moves (R or I/J format)"
+  processor -> processor: "Accumulate totalDist, cutDist, rapidDist"
+  processor -> processor: "Track feedMin, feedMax, toolChanges, machineTime"
+  processor -> processor: "Update bounds (minX/maxX/minY/maxY/minZ/maxZ)"
+  processor -> state: "state.moves = processedMoves"
+  processor -> state: "state.stats = computed statistics"
+  processor -> state: "state.bounds = bounding box"
+  state -> stats: "Update display: total distance, cut/rapid, bbox, time"
+  stats --> user: "Show statistics panel"
+  ui -> r2d: "new Canvas2DRenderer(canvas2d)"
+  r2d -> r2d: "zoomToFit() — calculate zoom from bounds"
+  r2d -> r2d: "render() — clear, drawGrid, drawMoves, drawBoundingBox"
+  r2d -> r2d: "Color code: red=rapid(dashed), cyan/amber/green=cut by depth"
+  r2d --> user: "2D toolpath displayed"
+}
+
+# ============================================================================
+# SEQUENCE DIAGRAM — Secondary: Simulation Playback
+# ============================================================================
+
+seq-simulation: Simulation Playback Control {
+  shape: sequence_diagram
+
+  user: User
+  playBtn: Play Button
+  controls: Simulation Controls
+  state: AppState
+  r2d: Canvas2DRenderer
+  display: Current State Display
+
+  user -> playBtn: "Click Play"
+  playBtn -> state: "state.isPlaying = true, state.isPaused = false"
+  playBtn -> controls: "Start simulation interval"
+  controls -> controls: "setInterval at speed-dependent rate"
+  controls -> state: "state.currentLine++"
+  controls -> state: "Read move = state.moves[currentLine]"
+  controls -> display: "Update X: move.endX"
+  controls -> display: "Update Y: move.endY"
+  controls -> display: "Update Z: move.endZ"
+  controls -> display: "Update F: move.feedRate"
+  controls -> display: "Update S: move.spindleSpeed"
+  controls -> display: "Update T: move.tool"
+  controls -> r2d: "render() — draw with currentLine highlight"
+  r2d -> r2d: "Highlight current move, show tool position + crosshair"
+  r2d -> controls: "Update progress bar: currentLine / total"
+  controls -> display: "Update progress text: '42/128'"
+  display --> user: "Real-time position and progress shown"
+
+  user -> controls: "Click Step Forward"
+  controls -> state: "state.currentLine++ (single step)"
+  controls -> r2d: "render()"
+
+  user -> controls: "Click Step Back"
+  controls -> state: "state.currentLine-- (if > 0)"
+  controls -> r2d: "render()"
+
+  user -> controls: "Click Pause"
+  controls -> state: "state.isPaused = true"
+  controls -> controls: "clearInterval()"
+
+  user -> controls: "Click Stop"
+  controls -> state: "state.currentLine = 0, isPlaying = false"
+  controls -> r2d: "render() — back to start"
+
+  user -> controls: "Adjust Speed slider"
+  controls -> state: "state.speed = sliderValue"
+  controls -> controls: "Recalculate interval timing"
+}
+
+# ============================================================================
+# SEQUENCE DIAGRAM — File Upload and Example Loading
+# ============================================================================
+
+seq-file: File Upload and Example Loading {
+  shape: sequence_diagram
+
+  user: User
+  tabs: Tab Navigation
+  fileTab: File Upload Tab
+  dropzone: Drop Zone
+  fileInput: File Input
+  exampleModal: Example Modal
+  textarea: G-Code Textarea
+  app: App Logic
+
+  user -> tabs: "Click 'Upload File' tab"
+  tabs -> tabs: "Show fileTab, hide pasteTab"
+  user -> dropzone: "Drag .nc/.gcode/.tap file onto drop zone"
+  dropzone -> dropzone: "dragover: prevent default, highlight border"
+  dropzone -> fileInput: "drop event: extract file from dataTransfer"
+  fileInput -> fileInput: "FileReader.readAsText(file)"
+  fileInput -> textarea: "Set gcodeInput.value = fileContent"
+  fileInput -> app: "Auto-trigger parse: processMovesForVisualization()"
+  app --> user: "Toolpath rendered from uploaded file"
+
+  user -> dropzone: "Click drop zone"
+  dropzone -> fileInput: "fileInput.click()"
+  fileInput -> user: "OS file picker dialog"
+  user -> fileInput: "Select .gcode file"
+  fileInput -> fileInput: "FileReader.readAsText(file)"
+  fileInput -> app: "Parse and render"
+
+  user -> exampleModal: "Click 'Examples' button in header"
+  exampleModal -> exampleModal: "Show modal with example list"
+  user -> exampleModal: "Click 'Rectangle Pocket'"
+  exampleModal -> textarea: "Load example G-code string"
+  exampleModal -> exampleModal: "Close modal"
+  exampleModal -> app: "Auto-trigger parse and render"
+  app -> app: "processMovesForVisualization(exampleGcode)"
+  app --> user: "Example toolpath displayed"
+}
+
+# ============================================================================
+# ARCHITECTURE
+# ============================================================================
+
+architecture: {
+  browser: Browser {
+    shape: cloud
+
+    html: index.html (single file) {
+      header: Header {
+        exportBtn: Export Button
+        exampleBtn: Examples Button
+      }
+
+      leftPanel: Left Panel — Editor {
+        pasteTab: Paste G-code Tab {
+          textarea: G-code Textarea
+          parseBtn: Parse & Render Button
+        }
+        fileTab: Upload File Tab {
+          dropZone: Drag & Drop Zone
+          fileInput: Hidden File Input
+        }
+      }
+
+      middlePanel: Middle Panel — Visualization {
+        viewTabs: View Tabs (2D / 3D)
+        canvas2d: Canvas 2D View
+        canvas3d: Canvas 3D View (pseudo-3D projection)
+      }
+
+      rightPanel: Right Panel — Controls {
+        simControls: Simulation Controls {
+          playPauseStop: Play / Pause / Stop
+          stepControls: Step Back / Step Forward
+          speedSlider: Speed Slider
+          progressBar: Progress Bar
+        }
+        toolSettings: Tool Settings (diameter)
+        currentState: Current State (X/Y/Z/F/S/T)
+        statistics: Statistics Display
+      }
+    }
+
+    js: JavaScript Engine {
+      parser: GCodeParser Class
+      processor: Move Processor (processMovesForVisualization)
+      renderer2d: Canvas2DRenderer Class
+      renderer3d: Canvas3DRenderer Class
+      simEngine: Simulation Engine (interval-based)
+    }
+  }
+
+  cdn: CDN {
+    shape: cloud
+    tailwind: Tailwind CSS
+    fonts: Inter + JetBrains Mono
+  }
+
+  browser.html -> browser.js: "inline script"
+  browser.html -> cdn: "loads"
+  browser.js.parser -> browser.js.processor: "raw moves"
+  browser.js.processor -> browser.js.renderer2d: "processed moves"
+  browser.js.processor -> browser.js.renderer3d: "processed moves"
+  browser.js.simEngine -> browser.js.renderer2d: "step & render"
+  browser.js.simEngine -> browser.js.renderer3d: "step & render"
+}
+
+# ============================================================================
+# STATES
+# ============================================================================
+
+states: {
+  empty: Empty (No G-code loaded)
+  editing: Editing G-code
+  parsing: Parsing G-code
+  parsed: Parsed (Toolpath Ready)
+  view2d: 2D View Active
+  view3d: 3D View Active
+  simPlaying: Simulation Playing
+  simPaused: Simulation Paused
+  simStepping: Single Step
+
+  empty -> editing: "User pastes text or uploads file"
+  editing -> parsing: "Click 'Parse & Render'"
+  parsing -> parsed: "Parse complete, stats computed"
+  parsed -> view2d: "Select '2D View' tab (default)"
+  parsed -> view3d: "Select '3D View' tab"
+  view2d -> view3d: "Switch to 3D tab"
+  view3d -> view2d: "Switch to 2D tab"
+  view2d -> simPlaying: "Click Play"
+  view3d -> simPlaying: "Click Play"
+  simPlaying -> simPaused: "Click Pause"
+  simPaused -> simPlaying: "Click Play"
+  simPlaying -> parsed: "Click Stop / Reach end"
+  simPaused -> parsed: "Click Stop"
+  simPaused -> simStepping: "Click Step Forward/Back"
+  simStepping -> simPaused: "Step complete"
+  parsed -> editing: "User modifies G-code text"
+  empty -> parsed: "Load example from modal"
+}
