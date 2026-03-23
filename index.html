@@ -1646,6 +1646,7 @@ M30`
         });
 
         function handleFileUpload(file) {
+            if (file.size > 50 * 1024 * 1024) { alert('File too large (max 50MB)'); return; }
             const reader = new FileReader();
             reader.onload = (e) => {
                 gcodeInput.value = e.target.result;
@@ -1681,6 +1682,10 @@ M30`
         });
 
         // PWA Service Worker
+        // TODO (M-10): Move inline service worker to a proper sw.js file.
+        // Blob URL-based SW registration has limited browser support and
+        // prevents proper scope/origin control. For now, keep existing
+        // functionality with graceful error handling.
         if ('serviceWorker' in navigator) {
             const swCode = `self.addEventListener('install', e => {
                 e.waitUntil(caches.open('gcode-viewer-v1').then(cache => {
@@ -1690,7 +1695,7 @@ M30`
             self.addEventListener('fetch', e => {
                 e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
             });`;
-            
+
             const blob = new Blob([swCode], { type: 'application/javascript' });
             const url = URL.createObjectURL(blob);
             navigator.serviceWorker.register(url).catch(() => {});
@@ -1720,6 +1725,13 @@ M30`
   if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme'] });
 })();
 
+    // ── postMessage Origin Validation ──
+    const ALLOWED_ORIGINS = ['https://blacksphereindustries.nl', 'https://www.blacksphereindustries.nl'];
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      ALLOWED_ORIGINS.push('http://localhost:8080');
+    }
+    function isAllowedOrigin(origin) { return ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.pages.dev'); }
+
     // ── Portal Deep Link Bridge ──
     if (window.parent !== window) {
       const _notifyParentHash = () => {
@@ -1730,6 +1742,7 @@ M30`
       const _origReplace = history.replaceState.bind(history);
       history.replaceState = function() { _origReplace.apply(history, arguments); _notifyParentHash(); };
       window.addEventListener('message', function(e) {
+        if (!isAllowedOrigin(e.origin)) return;
         if (e.data && e.data.type === 'set-hash' && typeof e.data.hash === 'string') {
           if (window.location.hash !== '#' + e.data.hash) window.location.hash = e.data.hash;
         }
