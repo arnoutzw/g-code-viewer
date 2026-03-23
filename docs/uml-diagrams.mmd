@@ -1,0 +1,478 @@
+%% ============================================================
+%% G-CODE VIEWER - UML Diagrams
+%% ============================================================
+
+%% === CLASS DIAGRAM ===
+classDiagram
+    class AppState {
+        +gcode Move[]
+        +moves ProcessedMove[]
+        +currentLine int
+        +isPlaying boolean
+        +isPaused boolean
+        +speed float
+        +toolDiameter float
+        +units string
+        +currentX float
+        +currentY float
+        +currentZ float
+        +currentF float
+        +currentS float
+        +currentT int
+        +feedMode string
+        +plane string
+        +offsetX float
+        +offsetY float
+        +offsetZ float
+        +bounds BoundingBox
+        +stats Statistics
+    }
+
+    class BoundingBox {
+        +minX float
+        +maxX float
+        +minY float
+        +maxY float
+        +minZ float
+        +maxZ float
+    }
+
+    class Statistics {
+        +totalDist float
+        +cutDist float
+        +rapidDist float
+        +toolChanges int
+        +machineTime float
+        +feedMin float
+        +feedMax float
+        +validCommands int
+    }
+
+    class GCodeParser {
+        -units string
+        -feedMode string
+        -plane string
+        -spindle boolean
+        -spindleDir int
+        -positions PositionMap
+        -offsets OffsetMap
+        -feedRate float
+        -spindleSpeed float
+        -tool int
+        -moves Move[]
+        +parse(gcodeText) Move[]
+        +parseLineCommands(line) string[]
+        +processCommand(cmd, move) void
+        +processGCode(value, move) void
+        +processMCode(value, move) void
+    }
+
+    class Move {
+        +line int
+        +type string
+        +command string
+        +rapid boolean
+        +gcode int
+        +mcode int
+        +x float
+        +y float
+        +z float
+        +i float
+        +j float
+        +k float
+        +r float
+        +feedRate float
+        +spindleSpeed float
+        +tool int
+        +arcDir int
+        +toolComp string
+        +spindle string
+    }
+
+    class ProcessedMove {
+        +startX float
+        +startY float
+        +startZ float
+        +endX float
+        +endY float
+        +endZ float
+        +feedRate float
+        +spindleSpeed float
+        +tool int
+        +type string
+        +arcLength float
+    }
+
+    class Canvas2DRenderer {
+        -canvas HTMLCanvasElement
+        -ctx CanvasRenderingContext2D
+        -panX float
+        -panY float
+        -zoom float
+        -dpr float
+        +setup() void
+        +handleZoom(e) void
+        +handlePan(e) void
+        +zoomToFit() void
+        +render() void
+        +drawGrid(ctx) void
+        +drawMoves(ctx) void
+        +drawBoundingBox(ctx) void
+    }
+
+    class Canvas3DRenderer {
+        -canvas HTMLCanvasElement
+        -ctx CanvasRenderingContext2D
+        -rotX float
+        -rotY float
+        -zoom float
+        -dpr float
+        +setup() void
+        +handleRotation(e) void
+        +handleZoom(e) void
+        +render() void
+        +project(x, y, z) ScreenPoint
+        +drawMoves(ctx) void
+        +drawAxes(ctx) void
+    }
+
+    class SimulationController {
+        +play() void
+        +pause() void
+        +stop() void
+        +stepForward() void
+        +stepBack() void
+        +setSpeed(speed) void
+        +updateDisplay() void
+        -animationLoop() void
+    }
+
+    class ExampleProvider {
+        +getExample(name) string
+        +rectangle() string
+        +circle() string
+        +contour() string
+    }
+
+    AppState --> BoundingBox : contains
+    AppState --> Statistics : contains
+    AppState --> ProcessedMove : stores array of
+    GCodeParser --> Move : creates array of
+    Move --> ProcessedMove : processed into
+    Canvas2DRenderer --> AppState : reads
+    Canvas3DRenderer --> AppState : reads
+    SimulationController --> AppState : modifies
+    SimulationController --> Canvas2DRenderer : triggers render
+    SimulationController --> Canvas3DRenderer : triggers render
+
+%% === SEQUENCE DIAGRAM: Parse and Visualize G-Code ===
+sequenceDiagram
+    actor User
+    participant UI as Editor Panel
+    participant Parser as GCodeParser
+    participant Proc as MoveProcessor
+    participant State as AppState
+    participant R2D as Canvas2DRenderer
+    participant R3D as Canvas3DRenderer
+    participant Stats as Statistics Panel
+
+    Note over User,Stats: G-Code Input (Paste Tab)
+    User->>UI: paste G-code text into textarea
+    User->>UI: click "Parse & Render"
+
+    activate Proc
+    Proc->>Parser: new GCodeParser()
+    activate Parser
+    Proc->>Parser: parse(gcodeText)
+
+    loop For each line in G-code
+        Parser->>Parser: split line on ; or ( to remove comments
+        Parser->>Parser: parseLineCommands(code)
+        Parser->>Parser: match tokens [G/M codes, X/Y/Z/I/J/K/F/S/T values]
+
+        loop For each token
+            alt G-code
+                Parser->>Parser: processGCode(value, move)
+                Note right of Parser: G0=rapid, G1=linear,<br/>G2/G3=arc CW/CCW,<br/>G17/18/19=plane,<br/>G20/21=units,<br/>G90/91=abs/inc
+            else M-code
+                Parser->>Parser: processMCode(value, move)
+                Note right of Parser: M3/4=spindle on,<br/>M5=spindle off,<br/>M6=tool change,<br/>M30=program end
+            else Coordinate
+                Parser->>Parser: store x/y/z/i/j/k/r/f/s/t
+            end
+        end
+
+        opt move has type
+            Parser->>Parser: push move to moves[]
+        end
+    end
+
+    Parser-->>Proc: rawMoves[]
+    deactivate Parser
+
+    Proc->>State: state.gcode = rawMoves
+
+    loop For each rawMove
+        Proc->>Proc: create processedMove with start position
+        alt absolute mode
+            Proc->>Proc: newX/Y/Z = move.x/y/z or current
+        else incremental mode
+            Proc->>Proc: newX/Y/Z = current + move.x/y/z
+        end
+
+        alt linear or rapid
+            Proc->>Proc: compute distance = sqrt(dx^2 + dy^2 + dz^2)
+            Proc->>Proc: accumulate totalDist, cutDist or rapidDist
+            opt feedRate > 0
+                Proc->>Proc: machineTime += (dist / feedRate) * 60
+            end
+        else arc
+            Proc->>Proc: calculateArcLength(x1,y1,x2,y2,i,j,r)
+            alt R format
+                Proc->>Proc: angle = 2*asin(d/|r|), length = |r|*angle
+            else I,J format
+                Proc->>Proc: compute center, angles, length
+            end
+            Proc->>Proc: accumulate distances
+        else toolchange
+            Proc->>Proc: toolChanges++
+        end
+
+        Proc->>Proc: update bounds (min/max X,Y,Z)
+        Proc->>Proc: update current position
+        Proc->>Proc: push to processed moves[]
+    end
+
+    Proc->>State: state.moves = processedMoves
+    Proc->>State: state.stats = computed statistics
+    deactivate Proc
+
+    Proc->>Stats: update DOM elements
+    Stats->>Stats: display totalDist, cutDist, rapidDist
+    Stats->>Stats: display bounding box, machine time
+    Stats->>Stats: display commands, tool changes, feed range
+
+    Proc->>R2D: zoomToFit()
+    activate R2D
+    R2D->>R2D: compute zoom from bounds
+    R2D->>R2D: center on bounding box
+    R2D->>R2D: render()
+    R2D->>R2D: drawGrid()
+    R2D->>R2D: draw origin marker
+
+    loop For each processed move
+        alt rapid move
+            R2D->>R2D: draw dashed green line
+        else linear move
+            R2D->>R2D: draw solid amber line
+        else arc move
+            R2D->>R2D: draw arc segments
+        end
+    end
+
+    R2D->>R2D: draw current position marker + crosshair
+    R2D->>R2D: drawBoundingBox()
+    deactivate R2D
+
+%% === SEQUENCE DIAGRAM: Simulation Playback ===
+sequenceDiagram
+    actor User
+    participant UI as Control Panel
+    participant Sim as SimulationController
+    participant State as AppState
+    participant R2D as Canvas2DRenderer
+    participant Display as Current State Display
+
+    User->>UI: click Play button
+    UI->>Sim: play()
+    activate Sim
+    Sim->>State: isPlaying = true, isPaused = false
+
+    loop Animation Frame (requestAnimationFrame)
+        Sim->>State: currentLine += speed
+        alt currentLine >= moves.length
+            Sim->>State: currentLine = moves.length - 1
+            Sim->>Sim: stop()
+        else normal
+            Sim->>State: read moves[currentLine]
+            Sim->>Display: update X, Y, Z position
+            Sim->>Display: update F (feed rate)
+            Sim->>Display: update S (spindle speed)
+            Sim->>Display: update T (tool number)
+            Sim->>UI: update progressBar width
+            Sim->>UI: update progressText "N/M"
+            Sim->>R2D: render() [highlights current line]
+        end
+    end
+
+    opt User clicks Pause
+        User->>UI: click Pause
+        UI->>Sim: pause()
+        Sim->>State: isPaused = true
+        Sim->>Sim: cancelAnimationFrame
+    end
+
+    opt User clicks Stop
+        User->>UI: click Stop
+        UI->>Sim: stop()
+        Sim->>State: isPlaying = false, currentLine = 0
+        Sim->>R2D: render()
+        Sim->>Display: reset to 0
+    end
+
+    opt User clicks Step Forward
+        User->>UI: click Step Forward
+        UI->>Sim: stepForward()
+        Sim->>State: currentLine++
+        Sim->>R2D: render()
+        Sim->>Display: update values
+    end
+
+    opt User clicks Step Back
+        User->>UI: click Step Back
+        UI->>Sim: stepBack()
+        Sim->>State: currentLine--
+        Sim->>R2D: render()
+        Sim->>Display: update values
+    end
+    deactivate Sim
+
+%% === SEQUENCE DIAGRAM: File Upload ===
+sequenceDiagram
+    actor User
+    participant UI as File Tab
+    participant DropZone as Drop Zone
+    participant FileReader as FileReader API
+    participant Parser as Parse Pipeline
+
+    alt Drag and Drop
+        User->>DropZone: drag .nc/.gcode/.tap file
+        DropZone->>DropZone: highlight border (amber)
+        User->>DropZone: drop file
+        DropZone->>DropZone: preventDefault
+        DropZone->>FileReader: new FileReader()
+        FileReader->>FileReader: readAsText(file)
+        FileReader-->>UI: onload => text content
+    else Click to select
+        User->>DropZone: click drop zone
+        DropZone->>UI: trigger fileInput.click()
+        User->>UI: select file from dialog
+        UI->>FileReader: new FileReader()
+        FileReader->>FileReader: readAsText(file)
+        FileReader-->>UI: onload => text content
+    end
+
+    UI->>UI: set gcodeInput.value = text
+    UI->>Parser: processMovesForVisualization(text)
+    Parser-->>UI: moves parsed and rendered
+
+%% === COMPONENT DIAGRAM ===
+graph TB
+    subgraph "G-Code Viewer Application"
+        subgraph "Input Panel (Left)"
+            PasteTab["Paste Tab<br/>(textarea + parse button)"]
+            FileTab["File Tab<br/>(drag-drop zone + file input)"]
+            TabSwitch["Tab Switcher"]
+        end
+
+        subgraph "Visualization Panel (Center)"
+            View2D["2D Canvas View<br/>(Canvas2DRenderer)"]
+            View3D["3D Canvas View<br/>(Canvas3DRenderer)"]
+            ViewSwitch["View Tab Switcher"]
+            NoCanvas["Empty State Placeholder"]
+        end
+
+        subgraph "Control Panel (Right)"
+            SimControls["Simulation Controls<br/>(play, pause, stop, step)"]
+            SpeedSlider["Speed Slider"]
+            ProgressBar["Progress Bar"]
+            ToolSettings["Tool Settings<br/>(diameter)"]
+            CurrentState["Current State Display<br/>(X, Y, Z, F, S, T)"]
+            StatsPanel["Statistics Panel<br/>(distances, bbox, time, commands)"]
+        end
+
+        subgraph "Core Engine"
+            GCodeParser_C["GCodeParser Class<br/>(tokenizer, G/M-code interpreter)"]
+            MoveProc["Move Processor<br/>(position tracking, statistics)"]
+            ArcCalc["Arc Length Calculator"]
+        end
+
+        subgraph "Export"
+            ExportModal["Export Dialog"]
+        end
+
+        subgraph "Examples"
+            ExampleModal["Example Modal<br/>(rectangle, circle, contour)"]
+        end
+    end
+
+    subgraph "External CDN"
+        Tailwind_G["Tailwind CSS"]
+        Fonts_G["Google Fonts"]
+    end
+
+    PasteTab --> GCodeParser_C
+    FileTab --> GCodeParser_C
+    GCodeParser_C --> MoveProc
+    MoveProc --> ArcCalc
+    MoveProc --> View2D
+    MoveProc --> View3D
+    SimControls --> View2D
+    SimControls --> View3D
+    SimControls --> CurrentState
+    ExampleModal --> PasteTab
+    StatsPanel --- MoveProc
+
+%% === STATE DIAGRAM ===
+stateDiagram-v2
+    [*] --> Empty
+
+    state "Empty" as Empty {
+        [*] --> NoData
+        NoData : No G-code loaded
+        NoData : Canvas shows placeholder
+    }
+
+    state "InputMethod" as InputMethod {
+        [*] --> PasteMode
+        PasteMode --> FileMode : click File tab
+        FileMode --> PasteMode : click Paste tab
+        PasteMode --> Parsing : click Parse & Render
+        FileMode --> FileLoading : drop file or select file
+        FileLoading --> Parsing : FileReader.onload
+    }
+
+    state "Parsed" as Parsed {
+        [*] --> ViewSelection
+        state ViewSelection {
+            [*] --> View2DActive
+            View2DActive --> View3DActive : click 3D tab
+            View3DActive --> View2DActive : click 2D tab
+        }
+
+        state "Simulation" as SimState {
+            [*] --> SimStopped
+            SimStopped --> SimPlaying : play()
+            SimPlaying --> SimPaused : pause()
+            SimPaused --> SimPlaying : play()
+            SimPlaying --> SimStopped : stop() or reached end
+            SimPaused --> SimStopped : stop()
+
+            SimStopped --> StepMode : step forward/back
+            StepMode --> SimStopped : idle
+            StepMode --> SimPlaying : play()
+        end
+    }
+
+    Empty --> InputMethod : user starts input
+    InputMethod --> Empty : example selected
+    Parsing --> Parsed : parse successful
+    Parsed --> InputMethod : modify and re-parse
+
+    state "SpeedControl" as SpeedCtrl {
+        [*] --> Speed1x
+        Speed1x --> SpeedCustom : adjust slider
+        SpeedCustom --> Speed1x : reset
+    }
+
+    Parsed --> SpeedCtrl : adjust speed
